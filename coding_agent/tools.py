@@ -14,7 +14,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from config import WORKING_DIR
+from .config import WORKING_DIR
 
 # ---- 危险命令黑名单：命中即拒绝执行，作为 agent 的“安全护栏” ----
 DANGEROUS_PATTERNS = [

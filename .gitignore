@@ -11,11 +11,8 @@ env/
 .env
 config.json
 
-# Agent 运行时产生的文件（避免污染 Git 提交历史）
-fib.py
-temp_*/
-test_out/
-*.log
+# agent 工作目录（agent 生成的文件都在这里，不提交）
+workspace/
 
 # 开发环境
 .idea/

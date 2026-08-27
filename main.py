@@ -1,19 +1,43 @@
 """命令行入口。
 
 用法：
-    python main.py "你的编程任务"
-不带参数则进入交互式输入（输入空行结束）。
+    python main.py "你的编程任务"     # 单次任务，执行完即退出
+    python main.py                    # 进入交互式会话，可连续提问，exit/quit 退出
 """
 from __future__ import annotations
 
 import sys
 
-import config
-from agent import run
+from coding_agent import config
+from coding_agent.agent import run
 
 
 def on_event(msg: str) -> None:
     print(msg, flush=True)
+
+
+def run_once(task: str) -> None:
+    print("=" * 60)
+    answer = run(task, on_event=on_event)
+    print("=" * 60)
+    print(f"\n【结果】\n{answer}\n")
+
+
+def repl() -> None:
+    """交互式会话：持续读取任务、执行、再读取，直到输入 exit/quit 或按 Ctrl-C。"""
+    print("编程智能体已启动。直接输入编程任务即可；输入 exit / quit 退出。")
+    while True:
+        try:
+            task = input("\nagent> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见！")
+            return
+        if not task:
+            continue
+        if task.lower() in ("exit", "quit", "q", "退出"):
+            print("再见！")
+            return
+        run_once(task)
 
 
 def main() -> None:
@@ -23,24 +47,10 @@ def main() -> None:
         return
 
     if len(sys.argv) > 1:
-        task = " ".join(sys.argv[1:])
-    else:
-        print("请输入编程任务（输入空行结束）：")
-        lines: list[str] = []
-        while True:
-            line = input()
-            if line.strip() == "":
-                break
-            lines.append(line)
-        task = "\n".join(lines)
-        if not task.strip():
-            print("未输入任务，退出。")
-            return
+        run_once(" ".join(sys.argv[1:]))
+        return
 
-    print(f"\n任务：{task}\n" + "=" * 60)
-    answer = run(task, on_event=on_event)
-    print("=" * 60)
-    print(f"\n【最终结果】\n{answer}")
+    repl()
 
 
 if __name__ == "__main__":

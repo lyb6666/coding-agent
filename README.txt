@@ -6,7 +6,7 @@ https://github.com/lyb6666/coding-agent
 二、如何运行
 1. 安装依赖：pip install -r requirements.txt
 2. 配置密钥：复制 .env.example 为 .env，填入 DEEPSEEK_API_KEY
-3. 运行：python main.py "你的编程任务"；不带参数则进入交互式输入（空行结束）
+3. 运行：python main.py "你的编程任务"；不带参数则进入交互式会话（连续提问，exit 退出）
 
 三、特色功能
 · 手写 agent 主循环，不依赖任何 agent 框架/SDK，仅用 OpenAI 兼容客户端调用模型原生 tool calling 接口
@@ -18,3 +18,4 @@ https://github.com/lyb6666/coding-agent
 四、说明
 · 默认模型 deepseek-chat，可通过环境变量 DEEPSEEK_MODEL 切换
 · API key 仅经环境变量或未入库的 .env 提供，不会出现在仓库中
+· 源码位于 coding_agent/ 包，agent 生成的文件统一在 workspace/ 目录

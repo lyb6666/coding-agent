@@ -13,8 +13,8 @@ import time
 
 from openai import OpenAI
 
-import config
-from tools import TOOL_SCHEMAS, execute_tool
+from . import config
+from .tools import TOOL_SCHEMAS, execute_tool
 
 client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 

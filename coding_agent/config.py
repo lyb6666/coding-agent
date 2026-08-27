@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent  # 项目根目录（coding_agent 包的上一级）
 
 
 def load_env(path: Path | None = None) -> None:
@@ -40,4 +40,5 @@ MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # agent 行为参数（都可通过环境变量覆盖）
 MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "20"))
 MAX_CONTEXT_TOKENS = int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "32000"))
-WORKING_DIR = Path(os.environ.get("AGENT_WORKING_DIR", str(PROJECT_ROOT)))
+WORKING_DIR = Path(os.environ.get("AGENT_WORKING_DIR", str(PROJECT_ROOT / "workspace")))
+WORKING_DIR.mkdir(parents=True, exist_ok=True)

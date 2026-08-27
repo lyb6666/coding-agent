@@ -1,0 +1,24 @@
+# Python 编译缓存
+__pycache__/
+*.pyc
+
+# 虚拟环境目录
+.venv/
+venv/
+env/
+
+# 敏感配置文件（存放 API 密钥等）
+.env
+config.json
+
+# Agent 运行时产生的文件（避免污染 Git 提交历史）
+fib.py
+temp_*/
+test_out/
+*.log
+
+# 开发环境
+.idea/
+
+# 考核题目（不得对外泄露，勿提交）
+推免考核题目学生版.pdf

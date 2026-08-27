@@ -1,7 +1,7 @@
 编程智能体（coding agent）
 
 一、Git 仓库地址
-[此处填写你的公开仓库地址]
+https://github.com/lyb6666/coding-agent
 
 二、如何运行
 1. 安装依赖：pip install -r requirements.txt

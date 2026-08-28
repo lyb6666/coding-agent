@@ -13,7 +13,7 @@ import sys
 
 from coding_agent import config
 from coding_agent.agent import run
-from coding_agent.tools import TOOLS
+from coding_agent.tools import TOOLS, set_confirm_callback
 
 
 # ---- ANSI 颜色（自写，无第三方依赖）----
@@ -97,6 +97,16 @@ def _render_event(event_type: str, **data) -> None:
         print(f"  {C.RED}✗ {data['message']}{C.RESET}")
 
 
+def _confirm_dangerous(command: str) -> bool:
+    """危险命令确认：打印警告并询问用户是否执行（默认拒绝）。"""
+    print(f"{C.YELLOW}⚠ 检测到危险命令：{command}{C.RESET}")
+    try:
+        ans = input(f"{C.YELLOW}  是否执行？[y/N] {C.RESET}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False  # 无法交互时安全优先，拒绝执行
+    return ans in ("y", "yes")
+
+
 def _print_result(answer: str) -> None:
     print()
     print(f"{C.GREEN}{C.BOLD}┌─ 结果 ──────────────────{C.RESET}")
@@ -149,6 +159,7 @@ def repl() -> None:
 def main() -> None:
     enable_ansi()
     _setup_utf8()
+    set_confirm_callback(_confirm_dangerous)
     if not config.API_KEY:
         print(f"{C.RED}未检测到 DEEPSEEK_API_KEY。{C.RESET}")
         print("请复制 .env.example 为 .env 并填入密钥，或设置环境变量 DEEPSEEK_API_KEY。")

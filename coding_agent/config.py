@@ -40,6 +40,7 @@ MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # agent 行为参数（都可通过环境变量覆盖）
 MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "20"))
 MAX_CONTEXT_TOKENS = int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "32000"))
+REPEAT_LIMIT = int(os.environ.get("AGENT_REPEAT_LIMIT", "3"))  # 连续重复调用多少次判定为死循环
 # 工作目录：agent 读写文件、执行命令都在这里。默认是启动时的「当前目录」
 # （像 Claude Code 一样，在哪个目录敲 coding 就在哪个目录干活），
 # 也可通过环境变量 AGENT_WORKING_DIR 指定固定目录。

@@ -33,6 +33,17 @@ DANGEROUS_PATTERNS = [
 ]
 
 
+# 危险命令确认回调：由 CLI 注入。返回 True 表示允许执行，False 表示拒绝。
+# 默认未注入时一律拒绝（安全优先），体现「agent 的自主性必须有安全边界」。
+_confirm_dangerous = None
+
+
+def set_confirm_callback(fn) -> None:
+    """注入危险命令确认回调（由 CLI 调用）。"""
+    global _confirm_dangerous
+    _confirm_dangerous = fn
+
+
 def _resolve(path: str) -> Path:
     """把相对路径解析到工作目录下，并规范化为绝对路径。"""
     p = Path(path)
@@ -73,10 +84,58 @@ def list_files(path: str) -> str:
     return "\n".join(entries) if entries else f"{p} 是空目录"
 
 
+# 搜索时跳过的目录
+_SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "env", "node_modules", ".idea", ".egg-info", "build", "dist"}
+
+
+def search_content(path: str, pattern: str, max_results: int = 200) -> str:
+    """在目录下递归搜索文件内容，返回「文件路径:行号: 该行内容」。"""
+    p = _resolve(path)
+    if not p.exists():
+        return f"错误：路径不存在 {p}"
+
+    if p.is_file():
+        files = [p]
+    elif p.is_dir():
+        files = []
+        for f in p.rglob("*"):
+            if f.is_file() and not any(part in _SKIP_DIRS for part in f.parts):
+                files.append(f)
+    else:
+        return f"错误：{p} 既不是文件也不是目录"
+
+    matches = []
+    for f in files:
+        if len(matches) >= max_results:
+            break
+        try:
+            if f.stat().st_size > 1_000_000:  # 跳过 >1MB 的大文件
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if pattern in line:
+                matches.append(f"{f}:{lineno}: {line.strip()[:200]}")
+                if len(matches) >= max_results:
+                    break
+
+    if not matches:
+        return f"未找到包含 `{pattern}` 的内容"
+    out = "\n".join(matches)
+    if len(matches) >= max_results:
+        out += f"\n...(结果已达上限 {max_results} 条，已截断)"
+    return out
+
+
 def run_command(command: str, timeout: int = 60) -> str:
     for pat in DANGEROUS_PATTERNS:
         if pat in command:
-            return f"已拒绝执行：命令含危险模式 `{pat}`，请改用更安全的方式完成目标。"
+            allowed = _confirm_dangerous(command) if _confirm_dangerous else False
+            if not allowed:
+                return f"已拒绝执行：命令含危险模式 `{pat}`（未获用户确认）。"
+            break  # 用户已确认，继续执行
+
     try:
         proc = subprocess.run(
             command,
@@ -85,6 +144,7 @@ def run_command(command: str, timeout: int = 60) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            errors="replace",  # 输出含非 UTF-8 字节时不崩溃
         )
     except subprocess.TimeoutExpired:
         return f"错误：命令超时（>{timeout}s）"
@@ -159,6 +219,21 @@ TOOLS = {
                     "path": {"type": "string", "description": "目录路径"},
                 },
                 "required": ["path"],
+            },
+        },
+    }),
+    "search_content": (search_content, {
+        "type": "function",
+        "function": {
+            "name": "search_content",
+            "description": "在目录下递归搜索文件内容，返回「文件路径:行号: 该行内容」。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "要搜索的目录或文件路径"},
+                    "pattern": {"type": "string", "description": "要搜索的关键字"},
+                },
+                "required": ["path", "pattern"],
             },
         },
     }),

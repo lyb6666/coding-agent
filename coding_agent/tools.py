@@ -52,16 +52,31 @@ def _resolve(path: str) -> Path:
     return p.resolve()
 
 
-def read_file(path: str) -> str:
+def read_file(path: str, offset: int = 1, limit: int = 400) -> str:
+    """读取文件内容。offset 是起始行号（从 1 开始），limit 是最大行数，用于分段读大文件。"""
     p = _resolve(path)
     if not p.exists():
         return f"错误：文件不存在 {p}"
     if p.is_dir():
         return f"错误：{p} 是目录，请改用 list_files"
-    data = p.read_text(encoding="utf-8", errors="replace")
-    if len(data) > 8000:
-        data = data[:8000] + "\n...(内容过长，已截断)..."
-    return data
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as e:
+        return f"错误：读取 {p} 失败：{type(e).__name__}: {e}"
+
+    total = len(lines)
+    offset = max(1, offset)
+    start = offset - 1
+    if start >= total:
+        return f"{p} 只有 {total} 行，offset={offset} 已超出范围"
+
+    end = min(total, start + limit)
+    numbered = [f"{i}: {lines[i - 1]}" for i in range(start + 1, end + 1)]
+    header = f"{p}（共 {total} 行，显示第 {start + 1}–{end} 行）"
+    body = "\n".join(numbered)
+    if end < total:
+        body += f"\n...(剩余 {total - end} 行未显示，可设 offset={end + 1} 继续读)"
+    return header + "\n" + body
 
 
 def write_file(path: str, content: str) -> str:
@@ -169,11 +184,13 @@ TOOLS = {
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取指定文件的内容。",
+            "description": "读取文件内容，可指定起始行号 offset 和最大行数 limit，用于分段读取大文件。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件路径（相对或绝对）"},
+                    "offset": {"type": "integer", "description": "起始行号，从 1 开始，默认 1"},
+                    "limit": {"type": "integer", "description": "最多读取的行数，默认 400"},
                 },
                 "required": ["path"],
             },

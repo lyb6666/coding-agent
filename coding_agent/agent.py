@@ -33,11 +33,26 @@ def estimate_tokens(messages: list[dict]) -> int:
     return sum(len(str(m.get("content", ""))) for m in messages) // 4
 
 
-def trim_history(messages: list[dict]) -> list[dict]:
-    """上下文超限时，从中间丢弃最旧的一轮「工具调用 + 工具结果」。
+def _summarize_text(text: str) -> str:
+    """调用模型把一段执行历史压缩成一句要点。"""
+    resp = client.chat.completions.create(
+        model=config.MODEL,
+        messages=[
+            {"role": "system", "content": (
+                "你是历史压缩助手。把下面这段编程智能体的执行记录压缩成一句简洁要点，"
+                "说明做了什么操作、涉及哪些文件、结果如何。直接输出要点，不要解释。"
+            )},
+            {"role": "user", "content": text},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
 
-    始终保留最前的 system + 首条 user（任务目标）与最新内容（最近进展），
-    只牺牲中间的历史工具轮次——这是上下文管理策略的核心取舍。
+
+def compress_history(messages: list[dict], emit) -> list[dict]:
+    """上下文超限时，把最早的工具轮次「压缩成摘要」而非直接丢弃。
+
+    始终保留最前的 system + 首条 user（任务目标）与最新内容；中间的历史轮次被
+    压缩成一句话摘要插回，这样既省 token 又不丢失「已经做到哪一步」的信息。
     """
     while estimate_tokens(messages) > config.MAX_CONTEXT_TOKENS:
         idx = None
@@ -46,10 +61,23 @@ def trim_history(messages: list[dict]) -> list[dict]:
                 idx = i
                 break
         if idx is None:
-            break  # 没有可裁剪的工具轮次，放弃裁剪
-        del messages[idx]  # 删除 assistant(tool_calls) 消息
-        while idx < len(messages) and messages[idx].get("role") == "tool":
-            del messages[idx]  # 连带删除其对应的 tool 结果，保证消息序列合法
+            break  # 没有可压缩的工具轮次
+
+        end = idx + 1
+        while end < len(messages) and messages[end].get("role") == "tool":
+            end += 1
+
+        round_text = "\n".join(str(m.get("content", "")) for m in messages[idx:end])
+        try:
+            summary = _summarize_text(round_text)
+        except Exception:
+            summary = None  # 摘要失败就退回「丢弃」的旧行为
+        if emit:
+            emit("summary", message="上下文超限，已压缩最早的一轮历史")
+
+        del messages[idx:end]
+        if summary:
+            messages.insert(idx, {"role": "user", "content": f"[历史摘要] {summary}"})
     return messages
 
 
@@ -93,7 +121,7 @@ def run(task: str, on_event=None) -> str:
     repeat_count = 0
 
     for step in range(1, config.MAX_ITERATIONS + 1):
-        messages = trim_history(messages)
+        messages = compress_history(messages, emit)
         emit("step", n=step)
 
         try:
@@ -102,11 +130,16 @@ def run(task: str, on_event=None) -> str:
             return f"模型调用失败：{e}"
 
         msg = resp.choices[0].message
+        finish_reason = resp.choices[0].finish_reason
 
         # 没有请求任何工具 -> 视为任务完成
         if not msg.tool_calls:
+            content = msg.content or "(模型未返回文本)"
+            if finish_reason == "length":
+                # 输出达到长度上限被截断：如实标注，避免静默丢失
+                content += "\n[注意：回答因长度限制被截断，可能不完整]"
             messages.append({"role": "assistant", "content": msg.content or ""})
-            return msg.content or "(模型未返回文本)"
+            return content
 
         # 记入 assistant 消息（含 tool_calls）
         messages.append({

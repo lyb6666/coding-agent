@@ -95,6 +95,8 @@ def _render_event(event_type: str, **data) -> None:
         print(f"       {C.GREEN}└─ {first}{C.RESET}")
     elif event_type == "error":
         print(f"  {C.RED}✗ {data['message']}{C.RESET}")
+    elif event_type == "summary":
+        print(f"  {C.YELLOW}📝 {data['message']}{C.RESET}")
 
 
 def _confirm_dangerous(command: str) -> bool:
@@ -126,7 +128,11 @@ def _print_tools() -> None:
 def run_once(task: str) -> None:
     print(f"{C.DIM}任务：{task}{C.RESET}")
     print(f"{C.DIM}{'─' * 48}{C.RESET}")
-    answer = run(task, on_event=_render_event)
+    try:
+        answer = run(task, on_event=_render_event)
+    except KeyboardInterrupt:
+        print(f"\n{C.YELLOW}⏹ 已中断当前任务，回到提示符。{C.RESET}\n")
+        return
     _print_result(answer)
 
 

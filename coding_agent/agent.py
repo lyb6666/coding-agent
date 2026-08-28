@@ -54,11 +54,15 @@ def trim_history(messages: list[dict]) -> list[dict]:
 
 
 def run(task: str, on_event=None) -> str:
-    """执行 agent 主循环，返回最终回答文本。on_event 回调用于打印过程。"""
+    """执行 agent 主循环，返回最终回答文本。
 
-    def log(msg: str) -> None:
+    on_event(event_type, **data) 是可选的事件回调，用于把 agent 的状态（轮次、
+    工具调用、工具结果、错误）汇报给 UI；UI 只负责渲染，与核心逻辑解耦。
+    """
+
+    def emit(event_type: str, **data) -> None:
         if on_event:
-            on_event(msg)
+            on_event(event_type, **data)
 
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -67,7 +71,7 @@ def run(task: str, on_event=None) -> str:
 
     for step in range(1, config.MAX_ITERATIONS + 1):
         messages = trim_history(messages)
-        log(f"[第 {step} 轮] 调用模型 ...")
+        emit("step", n=step)
 
         try:
             resp = client.chat.completions.create(
@@ -78,7 +82,7 @@ def run(task: str, on_event=None) -> str:
             )
         except Exception as e:
             # 网络抖动 / 限流：简单退避重试一次，仍失败则停止并如实报告
-            log(f"[第 {step} 轮] 模型调用失败：{e}，2 秒后重试 ...")
+            emit("retry", message=f"模型调用失败：{e}，2 秒后重试")
             time.sleep(2)
             try:
                 resp = client.chat.completions.create(
@@ -118,9 +122,9 @@ def run(task: str, on_event=None) -> str:
         for tc in msg.tool_calls:
             name = tc.function.name
             args = tc.function.arguments
-            log(f"  → 调用工具 {name}({args})")
+            emit("tool_call", name=name, args=args)
             result = execute_tool(name, args)
-            log(f"  ← {result[:200]}")
+            emit("tool_result", name=name, result=result)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
     return "达到最大迭代轮数，任务未在限制内完成。"

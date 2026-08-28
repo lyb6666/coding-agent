@@ -11,7 +11,12 @@ env/
 .env
 config.json
 
-# agent 工作目录（agent 生成的文件都在这里，不提交）
+# 打包产物（pip install -e . 生成）
+*.egg-info/
+build/
+dist/
+
+# 工作目录（agent 测试产物，不提交）
 workspace/
 
 # 开发环境

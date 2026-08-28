@@ -40,5 +40,7 @@ MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # agent 行为参数（都可通过环境变量覆盖）
 MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "20"))
 MAX_CONTEXT_TOKENS = int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "32000"))
-WORKING_DIR = Path(os.environ.get("AGENT_WORKING_DIR", str(PROJECT_ROOT / "workspace")))
-WORKING_DIR.mkdir(parents=True, exist_ok=True)
+# 工作目录：agent 读写文件、执行命令都在这里。默认是启动时的「当前目录」
+# （像 Claude Code 一样，在哪个目录敲 coding 就在哪个目录干活），
+# 也可通过环境变量 AGENT_WORKING_DIR 指定固定目录。
+WORKING_DIR = Path(os.environ.get("AGENT_WORKING_DIR", str(Path.cwd())))

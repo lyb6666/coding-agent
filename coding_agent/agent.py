@@ -113,6 +113,12 @@ def compress_history(messages: list[dict], emit) -> list[dict]:
     return messages
 
 
+def _is_permanent_error(e: Exception) -> bool:
+    """判断是否为「永久性错误」（重试无意义），如无效密钥 401、请求格式错误 4xx。"""
+    status = getattr(e, "status_code", None)
+    return status is not None and 400 <= status < 500 and status != 429
+
+
 def _call_model(messages: list[dict], emit):
     """调用模型，指数退避重试（最多 3 次），处理限流与网络抖动。"""
     delay = 1.0
@@ -127,6 +133,8 @@ def _call_model(messages: list[dict], emit):
             )
         except Exception as e:
             last_err = e
+            if _is_permanent_error(e):
+                raise  # 永久错误重试无意义，立即抛出
             if attempt < 3:
                 emit("retry", message=f"模型调用失败：{e}，{delay:.0f} 秒后重试")
                 time.sleep(delay)
@@ -144,6 +152,17 @@ def _generate_plan(task: str) -> str:
         ],
     )
     return (resp.choices[0].message.content or "").strip()
+
+
+def _is_failure(result: str) -> bool:
+    """判断工具执行结果是否表示失败（只看状态/错误前缀，避免误判输出内容）。"""
+    first = result.splitlines()[0] if result else ""
+    return (
+        first.startswith("错误")
+        or "（失败）" in first
+        or "已拒绝" in first
+        or "超时" in first
+    )
 
 
 def run(task: str, on_event=None) -> str:
@@ -176,6 +195,7 @@ def run(task: str, on_event=None) -> str:
         messages.append({"role": "user", "content": f"[执行计划]\n{plan}\n\n请按上面的计划逐步执行。"})
     last_call_key = None  # 上一次工具调用的 (name, args)，用于检测死循环
     repeat_count = 0
+    consecutive_failures = 0  # 连续失败次数，用于检测"无法完成任务"
 
     for step in range(1, config.MAX_ITERATIONS + 1):
         messages = compress_history(messages, emit)
@@ -188,6 +208,10 @@ def run(task: str, on_event=None) -> str:
 
         msg = resp.choices[0].message
         finish_reason = resp.choices[0].finish_reason
+
+        # 输出达到长度上限被截断：无论有无工具调用，都主动提示（避免静默丢尾）
+        if finish_reason == "length":
+            emit("retry", message="模型输出达到长度上限，已被截断")
 
         # 没有请求任何工具 -> 视为任务完成
         if not msg.tool_calls:
@@ -234,6 +258,16 @@ def run(task: str, on_event=None) -> str:
             emit("tool_call", name=name, args=args)
             result = execute_tool(name, args)
             emit("tool_result", name=name, result=result)
+
+            # 连续失败检测：连续多次工具执行失败（不一定是同一命令）→ 判定无法完成任务
+            if _is_failure(result):
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
+            if consecutive_failures >= config.FAILURE_LIMIT:
+                return (f"连续 {consecutive_failures} 次工具执行失败，"
+                        f"疑似无法完成任务，已停止执行。")
+
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
     return "达到最大迭代轮数，任务未在限制内完成。"

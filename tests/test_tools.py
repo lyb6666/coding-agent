@@ -5,6 +5,8 @@ from coding_agent.tools import (
     list_files,
     search_content,
     run_command,
+    _match_dangerous,
+    _clip_output,
 )
 
 
@@ -81,3 +83,23 @@ def test_run_command_stdin_redirects():
     result = run_command('python -c "input()"')
     assert "退出码" in result
     assert "EOFError" in result
+
+
+def test_dangerous_detection_is_exact():
+    # 分词后精确匹配：rm -rf / 命中，rm -rf /tmp 不误伤
+    assert _match_dangerous("rm -rf /") is not None
+    assert _match_dangerous("rm -rf /tmp") is None
+    assert _match_dangerous("rm -rf .cache") is None
+    assert _match_dangerous("echo hello") is None
+
+
+def test_clip_output_truncates_long_text():
+    long = "x" * 10000
+    result = _clip_output(long)
+    assert len(result) < 10000  # 被截断了
+    assert "省略" in result
+
+
+def test_clip_output_keeps_short_text():
+    short = "hello"
+    assert _clip_output(short) == short

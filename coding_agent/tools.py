@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,29 @@ DANGEROUS_PATTERNS = [
     "git push --force",
     "git reset --hard",
 ]
+
+
+def _split_command(command: str) -> list[str]:
+    """把命令拆成词元（用于危险检测）。shlex 失败时退化为按空白切分。"""
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def _match_dangerous(command: str) -> str | None:
+    """检测命令是否命中危险模式，命中则返回该模式，否则返回 None。
+
+    用「分词后精确匹配」而非朴素子串匹配：`rm -rf /` 不再误伤 `rm -rf /tmp`。
+    """
+    tokens = _split_command(command)
+    for pat in DANGEROUS_PATTERNS:
+        pat_tokens = _split_command(pat)
+        n = len(pat_tokens)
+        for i in range(len(tokens) - n + 1):
+            if tokens[i:i + n] == pat_tokens:
+                return pat
+    return None
 
 
 # 危险命令确认回调：由 CLI 注入。返回 True 表示允许执行，False 表示拒绝。
@@ -143,13 +167,24 @@ def search_content(path: str, pattern: str, max_results: int = 200) -> str:
     return out
 
 
+MAX_COMMAND_OUTPUT = 4000  # 单条命令输出最多返回的字符数，避免撑爆上下文
+
+
+def _clip_output(text: str) -> str:
+    """截断过长的命令输出，保留开头和结尾，中间省略。"""
+    text = text.rstrip()
+    if len(text) <= MAX_COMMAND_OUTPUT:
+        return text
+    half = MAX_COMMAND_OUTPUT // 2
+    return f"{text[:half]}\n...(中间省略 {len(text) - MAX_COMMAND_OUTPUT} 字符)...\n{text[-half:]}"
+
+
 def run_command(command: str, timeout: int = 60) -> str:
-    for pat in DANGEROUS_PATTERNS:
-        if pat in command:
-            allowed = _confirm_dangerous(command) if _confirm_dangerous else False
-            if not allowed:
-                return f"已拒绝执行：命令含危险模式 `{pat}`（未获用户确认）。"
-            break  # 用户已确认，继续执行
+    pat = _match_dangerous(command)
+    if pat:
+        allowed = _confirm_dangerous(command) if _confirm_dangerous else False
+        if not allowed:
+            return f"已拒绝执行：命令含危险模式 `{pat}`（未获用户确认）。"
 
     try:
         proc = subprocess.run(
@@ -167,9 +202,9 @@ def run_command(command: str, timeout: int = 60) -> str:
 
     parts = []
     if proc.stdout:
-        parts.append(proc.stdout.rstrip())
+        parts.append(_clip_output(proc.stdout))
     if proc.stderr:
-        parts.append(f"[stderr]\n{proc.stderr.rstrip()}")
+        parts.append(f"[stderr]\n{_clip_output(proc.stderr)}")
     if not parts:
         parts.append("(无输出)")
 

@@ -27,6 +27,14 @@ SYSTEM_PROMPT = """你是一个编程智能体（coding agent），目标是在�
 4. 完成后用一段简洁文字总结：你做了什么、结果如何。
 如果没有需要执行的操作，直接输出最终回答即可。"""
 
+PLANNER_PROMPT = """你是任务规划器。把用户的任务分解成「这个编程智能体将要执行」的步骤清单。
+这些步骤是给一个会用工具（write_file / run_command / read_file / list_files / search_content）的编程智能体执行的，不是给人手动操作的。
+要求：
+- 每步一行，用「1. 2. 3.」编号；
+- 每步写清「用哪个工具做什么」，例如「用 write_file 创建 xxx.py」「用 run_command 运行 python xxx.py」；
+- 只输出计划本身，不要解释，不要执行，不要用工具。
+"""
+
 
 def estimate_tokens(messages: list[dict]) -> int:
     """粗略估算上下文 token 数（字符数 / 4），用于决定是否裁剪历史。"""
@@ -102,6 +110,18 @@ def _call_model(messages: list[dict], emit):
     raise last_err
 
 
+def _generate_plan(task: str) -> str:
+    """规划阶段：把任务分解成带步骤的计划，返回计划文本。"""
+    resp = client.chat.completions.create(
+        model=config.MODEL,
+        messages=[
+            {"role": "system", "content": PLANNER_PROMPT},
+            {"role": "user", "content": task},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 def run(task: str, on_event=None) -> str:
     """执行 agent 主循环，返回最终回答文本。
 
@@ -113,10 +133,23 @@ def run(task: str, on_event=None) -> str:
         if on_event:
             on_event(event_type, **data)
 
+    # 阶段一：规划 —— 先把任务拆成步骤计划，再执行（Plan-and-Execute）
+    emit("planning")
+    try:
+        plan = _generate_plan(task)
+    except Exception as e:
+        plan = ""
+        emit("error", message=f"规划失败，跳过规划直接执行：{e}")
+    if plan:
+        emit("plan", plan=plan)
+
+    # 阶段二：按计划执行
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": task},
     ]
+    if plan:
+        messages.append({"role": "user", "content": f"[执行计划]\n{plan}\n\n请按上面的计划逐步执行。"})
     last_call_key = None  # 上一次工具调用的 (name, args)，用于检测死循环
     repeat_count = 0
 

@@ -97,6 +97,13 @@ def _render_event(event_type: str, **data) -> None:
         print(f"  {C.RED}✗ {data['message']}{C.RESET}")
     elif event_type == "summary":
         print(f"  {C.YELLOW}📝 {data['message']}{C.RESET}")
+    elif event_type == "planning":
+        print(f"  {C.MAGENTA}📋 正在规划任务步骤…{C.RESET}")
+    elif event_type == "plan":
+        print(f"  {C.MAGENTA}{C.BOLD}┌─ 执行计划 ──────────────────{C.RESET}")
+        for line in data["plan"].splitlines():
+            print(f"  {C.MAGENTA}│{C.RESET} {line}")
+        print(f"  {C.MAGENTA}└──────────────────────────────{C.RESET}")
 
 
 def _confirm_dangerous(command: str) -> bool:

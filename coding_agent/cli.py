@@ -89,10 +89,10 @@ def _render_event(event_type: str, **data) -> None:
         print(f"    {C.BLUE}🔧 {data['name']}{C.RESET}({C.DIM}{args}{C.RESET})")
     elif event_type == "tool_result":
         result = str(data.get("result", ""))
-        first = result.splitlines()[0] if result else ""
-        if len(first) > 120:
-            first = first[:120] + "…"
-        print(f"       {C.GREEN}└─ {first}{C.RESET}")
+        flat = " ".join(result.split())  # 压成单行，让用户能看到结果内容（而非只第一行）
+        if len(flat) > 200:
+            flat = flat[:200] + "…"
+        print(f"       {C.GREEN}└─ {flat}{C.RESET}")
     elif event_type == "error":
         print(f"  {C.RED}✗ {data['message']}{C.RESET}")
     elif event_type == "summary":

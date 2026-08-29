@@ -95,11 +95,14 @@ def test_dangerous_detection_is_exact():
 
 def test_clip_output_truncates_long_text():
     long = "x" * 10000
-    result = _clip_output(long)
+    result, was_truncated = _clip_output(long)
+    assert was_truncated is True
     assert len(result) < 10000  # 被截断了
     assert "省略" in result
 
 
 def test_clip_output_keeps_short_text():
     short = "hello"
-    assert _clip_output(short) == short
+    result, was_truncated = _clip_output(short)
+    assert result == short
+    assert was_truncated is False

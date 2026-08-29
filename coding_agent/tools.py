@@ -170,13 +170,14 @@ def search_content(path: str, pattern: str, max_results: int = 200) -> str:
 MAX_COMMAND_OUTPUT = 4000  # 单条命令输出最多返回的字符数，避免撑爆上下文
 
 
-def _clip_output(text: str) -> str:
-    """截断过长的命令输出，保留开头和结尾，中间省略。"""
+def _clip_output(text: str) -> tuple[str, bool]:
+    """截断过长的命令输出，返回 (截断后的文本, 是否被截断)。"""
     text = text.rstrip()
     if len(text) <= MAX_COMMAND_OUTPUT:
-        return text
+        return text, False
     half = MAX_COMMAND_OUTPUT // 2
-    return f"{text[:half]}\n...(中间省略 {len(text) - MAX_COMMAND_OUTPUT} 字符)...\n{text[-half:]}"
+    clipped = f"{text[:half]}\n...(中间省略 {len(text) - MAX_COMMAND_OUTPUT} 字符)...\n{text[-half:]}"
+    return clipped, True
 
 
 def run_command(command: str, timeout: int = 60) -> str:
@@ -201,16 +202,23 @@ def run_command(command: str, timeout: int = 60) -> str:
         return f"错误：命令超时（>{timeout}s）"
 
     parts = []
+    truncated = False
     if proc.stdout:
-        parts.append(_clip_output(proc.stdout))
+        clipped, was_trunc = _clip_output(proc.stdout)
+        truncated = truncated or was_trunc
+        parts.append(clipped)
     if proc.stderr:
-        parts.append(f"[stderr]\n{_clip_output(proc.stderr)}")
+        clipped, was_trunc = _clip_output(proc.stderr)
+        truncated = truncated or was_trunc
+        parts.append(f"[stderr]\n{clipped}")
     if not parts:
         parts.append("(无输出)")
 
     status = f"退出码 {proc.returncode}"
     if proc.returncode != 0:
         status += "（失败）"
+    if truncated:
+        status += "（输出过长已截断）"
     return f"{status}\n" + "\n".join(parts)
 
 

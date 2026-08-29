@@ -33,6 +33,20 @@ DANGEROUS_PATTERNS = [
     "git reset --hard",
 ]
 
+# 常驻服务命令：这些命令会启动一直运行的进程，会卡住执行环境
+LONG_RUNNING_PATTERNS = [
+    "http.server",
+    "flask run",
+    "uvicorn",
+    "gunicorn",
+    "runserver",
+    "nodemon",
+    "npm start",
+    "npm run dev",
+    "yarn dev",
+    "ng serve",
+]
+
 
 def _split_command(command: str) -> list[str]:
     """把命令拆成词元（用于危险检测）。shlex 失败时退化为按空白切分。"""
@@ -186,6 +200,12 @@ def run_command(command: str, timeout: int = 60) -> str:
         allowed = _confirm_dangerous(command) if _confirm_dangerous else False
         if not allowed:
             return f"已拒绝执行：命令含危险模式 `{pat}`（未获用户确认）。"
+
+    # 常驻服务命令会一直运行并卡住执行环境，直接拦截
+    for server_pat in LONG_RUNNING_PATTERNS:
+        if server_pat in command:
+            return (f"已拦截：命令会启动常驻服务（`{server_pat}`），它会一直运行并卡住执行环境。"
+                    f"请不要启动服务器；静态网页直接写好文件让用户打开即可。")
 
     try:
         proc = subprocess.run(

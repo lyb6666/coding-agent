@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import platform
 import time
 
 from openai import OpenAI
@@ -18,8 +19,31 @@ from .tools import TOOL_SCHEMAS, execute_tool
 
 client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 
-SYSTEM_PROMPT = """你是一个编程智能体（coding agent），目标是在工作目录下独立完成用户交给你的编程任务。
+def _shell_hint() -> str:
+    """根据操作系统给出 shell 命令提示，避免模型生成错误的命令语法。"""
+    if platform.system() == "Windows":
+        return (
+            "你运行在 Windows 上，命令请用 cmd.exe 语法：列目录用 `dir`（不是 `ls`），"
+            "路径用反斜杠 `C:\\...`（不是 `/c/...`），不要用 `sleep`、`curl`、`(cmd &)` 这类 Unix/bash 写法。"
+        )
+    return "你运行在 Unix/Linux 上，命令请用 bash 语法。"
+
+
+def _workspace_info() -> str:
+    """工作目录与路径约定，注入提示词，让模型用相对路径。"""
+    return (
+        f"工作目录：{config.WORKING_DIR}。读写文件请用「相对路径」（会自动解析到工作目录下），"
+        f"不要随意用绝对路径。"
+    )
+
+
+SYSTEM_PROMPT = f"""你是一个编程智能体（coding agent），目标是在工作目录下独立完成用户交给你的编程任务。
 你可以使用 read_file / write_file / run_command / list_files / search_content 等工具来读写文件、执行命令、搜索代码。
+
+{_workspace_info()}
+{_shell_hint()}
+注意：不要启动会一直运行的进程（HTTP 服务器、守护进程等），它们会卡住执行环境；静态网页这类任务直接写好文件让用户打开即可。
+
 工作方式：
 1. 先了解现状（list_files / read_file），再动手；
 2. 编写代码用 write_file 写入，用 run_command 运行验证；
@@ -27,8 +51,13 @@ SYSTEM_PROMPT = """你是一个编程智能体（coding agent），目标是在�
 4. 完成后用一段简洁文字总结：你做了什么、结果如何。
 如果没有需要执行的操作，直接输出最终回答即可。"""
 
-PLANNER_PROMPT = """你是任务规划器。把用户的任务分解成「这个编程智能体将要执行」的步骤清单。
+PLANNER_PROMPT = f"""你是任务规划器。把用户的任务分解成「这个编程智能体将要执行」的步骤清单。
 这些步骤是给一个会用工具（write_file / run_command / read_file / list_files / search_content）的编程智能体执行的，不是给人手动操作的。
+
+{_workspace_info()}
+{_shell_hint()}
+注意：不要规划「启动服务器 / 常驻进程」这类步骤（会卡住执行环境）。
+
 要求：
 - 每步一行，用「1. 2. 3.」编号；
 - 每步写清「用哪个工具做什么」，例如「用 write_file 创建 xxx.py」「用 run_command 运行 python xxx.py」；

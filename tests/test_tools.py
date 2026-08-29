@@ -72,6 +72,11 @@ def test_run_command_dangerous_denied():
     assert "已拒绝执行" in result
 
 
+def test_run_command_rejects_long_running_server():
+    result = run_command("python -m http.server 8000")
+    assert "已拦截" in result
+
+
 def test_run_command_basic():
     result = run_command("echo hello")
     assert "hello" in result

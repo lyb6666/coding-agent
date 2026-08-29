@@ -160,6 +160,7 @@ def run_command(command: str, timeout: int = 60) -> str:
             text=True,
             timeout=timeout,
             errors="replace",  # 输出含非 UTF-8 字节时不崩溃
+            stdin=subprocess.DEVNULL,  # 命令读 stdin 时立即得到 EOF，避免交互式程序挂起
         )
     except subprocess.TimeoutExpired:
         return f"错误：命令超时（>{timeout}s）"

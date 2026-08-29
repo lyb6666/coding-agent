@@ -36,9 +36,33 @@ PLANNER_PROMPT = """你是任务规划器。把用户的任务分解成「这个
 """
 
 
+def _estimate_text_tokens(text: str) -> int:
+    """估算单段文本的 token 数。
+
+    中文等全角字符按 1 字符≈1 token，其余（英文/数字）按 4 字符≈1 token；
+    向上取整略高估，宁可早一点压缩，也不让上下文溢出。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if ord(ch) > 0x2E80)
+    other = len(text) - cjk
+    return cjk + (other + 3) // 4
+
+
 def estimate_tokens(messages: list[dict]) -> int:
-    """粗略估算上下文 token 数（字符数 / 4），用于决定是否裁剪历史。"""
-    return sum(len(str(m.get("content", ""))) for m in messages) // 4
+    """估算上下文 token 数，用于决定是否压缩历史。
+
+    除了 content，还把 assistant 消息里 tool_calls 的 name/arguments 计入——
+    因为 write_file 的 arguments 就包含要写入的完整文件内容，漏掉会导致低估。
+    """
+    total = 0
+    for m in messages:
+        total += _estimate_text_tokens(str(m.get("content", "")))
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            total += _estimate_text_tokens(str(fn.get("name", "")))
+            total += _estimate_text_tokens(str(fn.get("arguments", "")))
+    return total
 
 
 def _summarize_text(text: str) -> str:
@@ -57,35 +81,35 @@ def _summarize_text(text: str) -> str:
 
 
 def compress_history(messages: list[dict], emit) -> list[dict]:
-    """上下文超限时，把最早的工具轮次「压缩成摘要」而非直接丢弃。
+    """上下文超限时，把最早的多轮工具历史「一次性压缩成摘要」，而非一轮一轮压。
 
-    始终保留最前的 system + 首条 user（任务目标）与最新内容；中间的历史轮次被
-    压缩成一句话摘要插回，这样既省 token 又不丢失「已经做到哪一步」的信息。
+    始终保留最前的 system + 首条 user（任务目标）与最近一轮（避免打断正在进行的
+    操作），中间的所有旧轮次打包成一条摘要插回。
     """
+    KEEP_ROUNDS = 1  # 保留最近几轮不压缩，确保执行连续性
+
     while estimate_tokens(messages) > config.MAX_CONTEXT_TOKENS:
-        idx = None
-        for i, m in enumerate(messages):
-            if m.get("role") == "assistant" and m.get("tool_calls"):
-                idx = i
-                break
-        if idx is None:
-            break  # 没有可压缩的工具轮次
+        round_starts = [
+            i for i, m in enumerate(messages)
+            if m.get("role") == "assistant" and m.get("tool_calls")
+        ]
+        if len(round_starts) <= KEEP_ROUNDS:
+            break  # 没有足够多的旧轮次可压缩
 
-        end = idx + 1
-        while end < len(messages) and messages[end].get("role") == "tool":
-            end += 1
+        first = round_starts[0]
+        last_keep = round_starts[-KEEP_ROUNDS]
+        old_text = "\n".join(str(m.get("content", "")) for m in messages[first:last_keep])
 
-        round_text = "\n".join(str(m.get("content", "")) for m in messages[idx:end])
         try:
-            summary = _summarize_text(round_text)
+            summary = _summarize_text(old_text)
         except Exception:
             summary = None  # 摘要失败就退回「丢弃」的旧行为
         if emit:
-            emit("summary", message="上下文超限，已压缩最早的一轮历史")
+            emit("summary", message=f"上下文超限，已压缩 {len(round_starts) - KEEP_ROUNDS} 轮历史")
 
-        del messages[idx:end]
+        del messages[first:last_keep]
         if summary:
-            messages.insert(idx, {"role": "user", "content": f"[历史摘要] {summary}"})
+            messages.insert(first, {"role": "user", "content": f"[历史摘要] {summary}"})
     return messages
 
 

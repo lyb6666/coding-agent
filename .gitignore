@@ -12,6 +12,9 @@ env/
 .env
 config.json
 
+# 会话历史（每个工作目录下自动生成）
+.coding_history.json
+
 # 打包产物（pip install -e . 生成）
 *.egg-info/
 build/

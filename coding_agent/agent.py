@@ -15,6 +15,7 @@ import time
 from openai import OpenAI
 
 from . import config
+from .storage import save_history
 from .tools import TOOL_SCHEMAS, execute_tool
 
 client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
@@ -194,34 +195,52 @@ def _is_failure(result: str) -> bool:
     )
 
 
-def run(task: str, on_event=None) -> str:
+def run(task: str, on_event=None, history: list[dict] | None = None) -> str:
     """执行 agent 主循环，返回最终回答文本。
 
     on_event(event_type, **data) 是可选的事件回调，用于把 agent 的状态（轮次、
     工具调用、工具结果、错误）汇报给 UI；UI 只负责渲染，与核心逻辑解耦。
+    history 为上次会话的消息列表（用于恢复对话），缺省则新开会话。
     """
 
     def emit(event_type: str, **data) -> None:
         if on_event:
             on_event(event_type, **data)
 
-    # 阶段一：规划 —— 先把任务拆成步骤计划，再执行（Plan-and-Execute）
-    emit("planning")
-    try:
-        plan = _generate_plan(task)
-    except Exception as e:
-        plan = ""
-        emit("error", message=f"规划失败，跳过规划直接执行：{e}")
-    if plan:
-        emit("plan", plan=plan)
+    # 阶段一：规划（恢复会话时跳过——上下文已建立，直接延续对话，不再生成计划）
+    plan = ""
+    if history is None:
+        emit("planning")
+        try:
+            plan = _generate_plan(task)
+        except Exception as e:
+            plan = ""
+            emit("error", message=f"规划失败，跳过规划直接执行：{e}")
+        if plan:
+            emit("plan", plan=plan)
 
-    # 阶段二：按计划执行
-    messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": task},
-    ]
+    # 阶段二：按计划执行（恢复会话则延续旧历史）
+    if history:
+        messages = list(history)
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": SYSTEM_PROMPT}  # 用最新 system prompt
+        messages.append({"role": "user", "content": task})
+    else:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": task},
+        ]
     if plan:
         messages.append({"role": "user", "content": f"[执行计划]\n{plan}\n\n请按上面的计划逐步执行。"})
+
+    try:
+        return _run_loop(messages, emit)
+    finally:
+        save_history(config.WORKING_DIR, messages)  # 无论成功失败都保存历史，便于下次恢复
+
+
+def _run_loop(messages: list[dict], emit) -> str:
+    """执行 agent 主循环（调用模型、执行工具、循环直到终止），返回最终回答。"""
     last_call_key = None  # 上一次工具调用的 (name, args)，用于检测死循环
     repeat_count = 0
     consecutive_failures = 0  # 连续失败次数，用于检测"无法完成任务"

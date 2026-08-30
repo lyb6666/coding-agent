@@ -13,6 +13,7 @@ import sys
 
 from coding_agent import config
 from coding_agent.agent import run
+from coding_agent.storage import load_history, clear_history
 from coding_agent.tools import TOOLS, set_confirm_callback
 
 
@@ -71,6 +72,7 @@ HELP_TEXT = f"""\
   {C.CYAN}help{C.RESET}    查看帮助
   {C.CYAN}tools{C.RESET}   列出 agent 可用的工具
   {C.CYAN}clear{C.RESET}   清屏
+  {C.CYAN}reset{C.RESET}   清空会话历史（重新开始）
   {C.CYAN}exit{C.RESET}    退出（也可 quit / q / 退出）
   {C.DIM}其它输入都会当作编程任务交给 agent 执行{C.RESET}
 """
@@ -132,11 +134,11 @@ def _print_tools() -> None:
         print(f"  {C.CYAN}{name}{C.RESET}  {C.DIM}{desc}{C.RESET}")
 
 
-def run_once(task: str) -> None:
+def run_once(task: str, history=None) -> None:
     print(f"{C.DIM}任务：{task}{C.RESET}")
     print(f"{C.DIM}{'─' * 48}{C.RESET}")
     try:
-        answer = run(task, on_event=_render_event)
+        answer = run(task, on_event=_render_event, history=history)
     except KeyboardInterrupt:
         print(f"\n{C.YELLOW}⏹ 已中断当前任务，回到提示符。{C.RESET}\n")
         return
@@ -145,6 +147,20 @@ def run_once(task: str) -> None:
 
 def repl() -> None:
     print(BANNER)
+    # 检测上次会话，询问是否继续
+    history = load_history(config.WORKING_DIR)
+    if history:
+        try:
+            ans = input(f"{C.YELLOW}检测到上次会话（{len(history)} 条消息），继续？[Y/n] {C.RESET}").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "n"
+        if ans in ("", "y", "yes"):
+            print(f"{C.DIM}已恢复上次会话。{C.RESET}")
+        else:
+            history = None
+            clear_history(config.WORKING_DIR)
+            print(f"{C.DIM}已开始新会话。{C.RESET}")
+
     while True:
         try:
             task = input(f"{C.MAGENTA}{C.BOLD}🐱 coding>{C.RESET} ").strip()
@@ -166,7 +182,13 @@ def repl() -> None:
         if low in ("tools", "工具"):
             _print_tools()
             continue
-        run_once(task)
+        if low in ("reset", "重置", "清空历史"):
+            clear_history(config.WORKING_DIR)
+            history = None
+            print(f"{C.DIM}已清空会话历史。{C.RESET}")
+            continue
+        run_once(task, history=history)
+        history = load_history(config.WORKING_DIR)  # run 内部已保存，重新加载更新后的历史
 
 
 def main() -> None:
@@ -179,7 +201,8 @@ def main() -> None:
         return
 
     if len(sys.argv) > 1:
-        run_once(" ".join(sys.argv[1:]))
+        history = load_history(config.WORKING_DIR)
+        run_once(" ".join(sys.argv[1:]), history=history)
         return
 
     repl()

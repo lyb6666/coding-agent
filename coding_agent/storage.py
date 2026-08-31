@@ -15,11 +15,17 @@ def _path(working_dir: Path) -> Path:
 
 
 def save_history(working_dir: Path, messages: list[dict]) -> None:
-    """把会话历史保存到工作目录下的 .coding_history.json。"""
-    _path(working_dir).write_text(
-        json.dumps({"messages": messages}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    """把会话历史保存到工作目录下的 .coding_history.json。
+
+    保存失败时静默忽略——历史持久化是辅助功能，不应因写盘失败而中断主流程。
+    """
+    try:
+        _path(working_dir).write_text(
+            json.dumps({"messages": messages}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def load_history(working_dir: Path) -> list[dict] | None:

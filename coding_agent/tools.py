@@ -98,9 +98,12 @@ def read_file(path: str, offset: int = 1, limit: int = 400) -> str:
     if p.is_dir():
         return f"错误：{p} 是目录，请改用 list_files"
     try:
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        raw = p.read_bytes()
     except Exception as e:
         return f"错误：读取 {p} 失败：{type(e).__name__}: {e}"
+    if 0 in raw:
+        return f"错误：{p} 是二进制文件，无法按文本读取"
+    lines = raw.decode("utf-8", errors="replace").splitlines()
 
     total = len(lines)
     offset = max(1, offset)
@@ -143,6 +146,8 @@ _SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "env", "node_modules", ".i
 
 def search_content(path: str, pattern: str, max_results: int = 200) -> str:
     """在目录下递归搜索文件内容，返回「文件路径:行号: 该行内容」。"""
+    if not pattern:
+        return f"错误：搜索关键字不能为空"
     p = _resolve(path)
     if not p.exists():
         return f"错误：路径不存在 {p}"
@@ -164,7 +169,10 @@ def search_content(path: str, pattern: str, max_results: int = 200) -> str:
         try:
             if f.stat().st_size > 1_000_000:  # 跳过 >1MB 的大文件
                 continue
-            text = f.read_text(encoding="utf-8", errors="replace")
+            raw = f.read_bytes()
+            if 0 in raw:  # 跳过二进制文件
+                continue
+            text = raw.decode("utf-8", errors="replace")
         except Exception:
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
@@ -181,6 +189,66 @@ def search_content(path: str, pattern: str, max_results: int = 200) -> str:
     return out
 
 
+def edit_file(path: str, old_string: str, new_string: str) -> str:
+    """把文件里第一处 old_string 替换成 new_string（局部编辑，避免整文件重写）。
+
+    old_string 必须在文件中唯一出现，否则报错让模型提供更长的上下文。
+    """
+    if not old_string:
+        return f"错误：old_string 不能为空"
+    p = _resolve(path)
+    if not p.exists():
+        return f"错误：文件不存在 {p}"
+    if p.is_dir():
+        return f"错误：{p} 是目录"
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"错误：读取 {p} 失败：{type(e).__name__}: {e}"
+
+    count = content.count(old_string)
+    if count == 0:
+        return f"错误：在 {p} 中未找到要替换的内容"
+    if count > 1:
+        return f"错误：要替换的内容在文件中出现了 {count} 次，请提供更长的上下文使其唯一"
+
+    try:
+        p.write_text(content.replace(old_string, new_string, 1), encoding="utf-8")
+    except Exception as e:
+        return f"错误：写入 {p} 失败：{type(e).__name__}: {e}"
+    return f"已替换 {p} 中的一处内容"
+
+
+def delete_file(path: str) -> str:
+    """删除指定文件。"""
+    p = _resolve(path)
+    if not p.exists():
+        return f"错误：文件不存在 {p}"
+    if p.is_dir():
+        return f"错误：{p} 是目录，删除目录请用 run_command"
+    try:
+        p.unlink()
+    except Exception as e:
+        return f"错误：删除 {p} 失败：{type(e).__name__}: {e}"
+    return f"已删除 {p}"
+
+
+def move_file(src: str, dst: str) -> str:
+    """移动或重命名文件。"""
+    s = _resolve(src)
+    d = _resolve(dst)
+    if not s.exists():
+        return f"错误：源文件不存在 {s}"
+    if d.exists():
+        return f"错误：目标已存在 {d}"
+    try:
+        d.parent.mkdir(parents=True, exist_ok=True)
+        s.rename(d)
+    except Exception as e:
+        return f"错误：移动 {s} 失败：{type(e).__name__}: {e}"
+    return f"已移动 {s} → {d}"
+
+
 MAX_COMMAND_OUTPUT = 4000  # 单条命令输出最多返回的字符数，避免撑爆上下文
 
 
@@ -195,6 +263,8 @@ def _clip_output(text: str) -> tuple[str, bool]:
 
 
 def run_command(command: str, timeout: int = 60) -> str:
+    if not command.strip():
+        return f"错误：命令不能为空"
     pat = _match_dangerous(command)
     if pat:
         allowed = _confirm_dangerous(command) if _confirm_dangerous else False
@@ -315,6 +385,51 @@ TOOLS = {
                     "pattern": {"type": "string", "description": "要搜索的关键字"},
                 },
                 "required": ["path", "pattern"],
+            },
+        },
+    }),
+    "edit_file": (edit_file, {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "把文件里第一处 old_string 替换成 new_string，用于局部编辑；old_string 需唯一。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件路径"},
+                    "old_string": {"type": "string", "description": "要替换的原文"},
+                    "new_string": {"type": "string", "description": "替换后的新内容"},
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    }),
+    "delete_file": (delete_file, {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除指定文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "要删除的文件路径"},
+                },
+                "required": ["path"],
+            },
+        },
+    }),
+    "move_file": (move_file, {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": "移动或重命名文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {"type": "string", "description": "源文件路径"},
+                    "dst": {"type": "string", "description": "目标文件路径"},
+                },
+                "required": ["src", "dst"],
             },
         },
     }),

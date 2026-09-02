@@ -1,7 +1,7 @@
 """agent.py 的单元测试：验证上下文管理与历史压缩逻辑（不调用真实模型）。"""
 import coding_agent.agent as agent_mod
 from coding_agent import config
-from coding_agent.agent import estimate_tokens, compress_history, _is_failure, _is_permanent_error
+from coding_agent.agent import estimate_tokens, compress_history, _is_failure, _classify_error
 
 
 def test_estimate_tokens():
@@ -90,13 +90,13 @@ def test_is_failure_detects_errors():
     assert _is_failure("未找到包含 xxx 的内容") is False
 
 
-def test_is_permanent_error():
+def test_classify_error():
     class FakeError(Exception):
-        def __init__(self, status):
+        def __init__(self, status=None):
             self.status_code = status
 
-    assert _is_permanent_error(FakeError(401)) is True  # 无效密钥
-    assert _is_permanent_error(FakeError(400)) is True  # 请求格式错误
-    assert _is_permanent_error(FakeError(429)) is False  # 限流是瞬时的
-    assert _is_permanent_error(FakeError(500)) is False  # 5xx 是瞬时的
-    assert _is_permanent_error(Exception("network")) is False  # 无 status_code
+    assert _classify_error(FakeError(401)) == "permanent"  # 无效密钥
+    assert _classify_error(FakeError(400)) == "permanent"  # 请求格式错误
+    assert _classify_error(FakeError(429)) == "rate_limit"  # 限流
+    assert _classify_error(FakeError(500)) == "server"  # 服务端错误
+    assert _classify_error(Exception("network")) == "unknown"  # 无 status_code

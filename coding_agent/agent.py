@@ -1,11 +1,20 @@
 """agent 核心循环。
 
-这是整个项目的“心脏”，负责：
-1. 维护对话历史与上下文（含超限裁剪）；
+这是整个项目的"心脏"，负责把「用户任务」通过一个循环转化为「完成的编程任务」。
+
+整体架构（Plan-and-Execute + 主循环）：
+- 阶段一（规划）：把任务拆成步骤计划，让行为可预测、可审查；
+- 阶段二（执行）：进入主循环，反复「调用模型 → 解析工具调用 → 本地执行 → 结果回填」，
+  直到模型不再需要调用工具为止。
+
+关键职责：
+1. 维护对话历史与上下文（token 估算 + 超限压缩成摘要）；
 2. 调用模型并解析其 tool_calls；
 3. 驱动工具在本地执行，把结果回填给模型；
-4. 决定循环何时终止；
-5. 兜底处理模型调用失败等各类错误。
+4. 决定循环何时终止（无工具调用 / 最大轮数 / 死循环 / 连续失败）；
+5. 兜底处理模型调用失败等各类错误（按错误类型决定重试策略）；
+6. 累计执行统计（轮数、工具调用次数、token 消耗），并在结束后汇报；
+7. 持久化会话历史（每个工作目录独立存储，跨终端恢复）。
 """
 from __future__ import annotations
 
@@ -39,7 +48,7 @@ def _workspace_info() -> str:
 
 
 SYSTEM_PROMPT = f"""你是一个编程智能体（coding agent），目标是在工作目录下独立完成用户交给你的编程任务。
-你可以使用 read_file / write_file / run_command / list_files / search_content 等工具来读写文件、执行命令、搜索代码。
+你可以使用 read_file / write_file / edit_file / delete_file / move_file / run_command / list_files / search_content 等工具来读写文件、执行命令、搜索代码。
 
 {_workspace_info()}
 {_shell_hint()}
@@ -53,7 +62,7 @@ SYSTEM_PROMPT = f"""你是一个编程智能体（coding agent），目标是在
 如果没有需要执行的操作，直接输出最终回答即可。"""
 
 PLANNER_PROMPT = f"""你是任务规划器。把用户的任务分解成「这个编程智能体将要执行」的步骤清单。
-这些步骤是给一个会用工具（write_file / run_command / read_file / list_files / search_content）的编程智能体执行的，不是给人手动操作的。
+这些步骤是给一个会用工具（read_file / write_file / edit_file / delete_file / move_file / run_command / list_files / search_content）的编程智能体执行的，不是给人手动操作的。
 
 {_workspace_info()}
 {_shell_hint()}
@@ -143,14 +152,35 @@ def compress_history(messages: list[dict], emit) -> list[dict]:
     return messages
 
 
-def _is_permanent_error(e: Exception) -> bool:
-    """判断是否为「永久性错误」（重试无意义），如无效密钥 401、请求格式错误 4xx。"""
+def _classify_error(e: Exception) -> str:
+    """把异常分类，用于决定重试策略。
+
+    返回类别：
+    - permanent  ：无效密钥、请求格式错误（4xx，除 429）——重试无意义
+    - rate_limit ：限流（429）——等更久再重试
+    - server     ：服务端错误（5xx）——可重试
+    - timeout    ：超时——可重试
+    - network    ：网络连接问题——可重试
+    - unknown    ：其它
+    """
     status = getattr(e, "status_code", None)
-    return status is not None and 400 <= status < 500 and status != 429
+    if status is not None:
+        if status == 429:
+            return "rate_limit"
+        if 400 <= status < 500:
+            return "permanent"
+        if status >= 500:
+            return "server"
+    name = type(e).__name__.lower()
+    if "timeout" in name:
+        return "timeout"
+    if any(k in name for k in ("connection", "network", "apiconnection")):
+        return "network"
+    return "unknown"
 
 
 def _call_model(messages: list[dict], emit):
-    """调用模型，指数退避重试（最多 3 次），处理限流与网络抖动。"""
+    """调用模型，指数退避重试（最多 3 次），按错误类型决定重试策略。"""
     delay = 1.0
     last_err: Exception | None = None
     for attempt in range(1, 4):
@@ -163,10 +193,13 @@ def _call_model(messages: list[dict], emit):
             )
         except Exception as e:
             last_err = e
-            if _is_permanent_error(e):
-                raise  # 永久错误重试无意义，立即抛出
+            category = _classify_error(e)
+            if category == "permanent":  # 无效密钥/请求格式错误：重试无意义，立即抛出
+                raise
+            if category == "rate_limit":  # 限流：等待更久，给服务器喘息时间
+                delay = max(delay, 5.0)
             if attempt < 3:
-                emit("retry", message=f"模型调用失败：{e}，{delay:.0f} 秒后重试")
+                emit("retry", message=f"模型调用失败（{category}）：{e}，{delay:.0f} 秒后重试")
                 time.sleep(delay)
                 delay *= 2
     raise last_err
@@ -195,17 +228,61 @@ def _is_failure(result: str) -> bool:
     )
 
 
-def run(task: str, on_event=None, history: list[dict] | None = None) -> str:
-    """执行 agent 主循环，返回最终回答文本。
+def validate_config() -> list[str]:
+    """校验配置，返回问题列表（空列表表示正常）。用于启动时快速暴露配置错误。"""
+    problems = []
+    if not config.API_KEY:
+        problems.append("未配置 DEEPSEEK_API_KEY")
+    if config.MAX_ITERATIONS < 1:
+        problems.append("MAX_ITERATIONS 必须 ≥ 1")
+    if config.MAX_CONTEXT_TOKENS < 100:
+        problems.append("MAX_CONTEXT_TOKENS 过小（< 100）")
+    if config.REPEAT_LIMIT < 1 or config.FAILURE_LIMIT < 1:
+        problems.append("REPEAT_LIMIT / FAILURE_LIMIT 必须 ≥ 1")
+    return problems
 
-    on_event(event_type, **data) 是可选的事件回调，用于把 agent 的状态（轮次、
-    工具调用、工具结果、错误）汇报给 UI；UI 只负责渲染，与核心逻辑解耦。
-    history 为上次会话的消息列表（用于恢复对话），缺省则新开会话。
+
+def _build_initial_messages(task: str, plan: str, history: list[dict] | None) -> list[dict]:
+    """构建初始对话消息：新会话从 system+task 开始，恢复会话则延续旧历史。"""
+    if history:
+        messages = list(history)
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": SYSTEM_PROMPT}  # 用最新 system prompt
+        messages.append({"role": "user", "content": task})
+    else:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": task},
+        ]
+    if plan:
+        messages.append({"role": "user", "content": f"[执行计划]\n{plan}\n\n请按上面的计划逐步执行。"})
+    return messages
+
+
+def _truncate_task(task: str, max_chars: int = 4000) -> str:
+    """截断过长的任务描述，避免单个任务占用过多上下文。"""
+    if len(task) <= max_chars:
+        return task
+    return task[:max_chars] + "\n...(任务过长，已截断)..."
+
+
+def run(task: str, on_event=None, history: list[dict] | None = None) -> str:
+    """执行一次完整的 agent 任务，返回最终回答文本。
+
+    流程：先规划（把任务拆成步骤计划），再进入主循环执行，最后保存会话历史。
+
+    参数：
+    - task：用户交给 agent 的任务描述；
+    - on_event(event_type, **data)：可选事件回调，把 agent 的状态（轮次、工具调用、
+      工具结果、错误、统计）汇报给 UI，UI 只负责渲染，与核心逻辑解耦；
+    - history：可选，上次会话的消息列表，用于跨终端恢复对话；缺省则新开会话。
     """
 
     def emit(event_type: str, **data) -> None:
         if on_event:
             on_event(event_type, **data)
+
+    task = _truncate_task(task)  # 防御：任务过长时截断
 
     # 阶段一：规划（恢复会话时跳过——上下文已建立，直接延续对话，不再生成计划）
     plan = ""
@@ -220,32 +297,29 @@ def run(task: str, on_event=None, history: list[dict] | None = None) -> str:
             emit("plan", plan=plan)
 
     # 阶段二：按计划执行（恢复会话则延续旧历史）
-    if history:
-        messages = list(history)
-        if messages and messages[0].get("role") == "system":
-            messages[0] = {"role": "system", "content": SYSTEM_PROMPT}  # 用最新 system prompt
-        messages.append({"role": "user", "content": task})
-    else:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task},
-        ]
-    if plan:
-        messages.append({"role": "user", "content": f"[执行计划]\n{plan}\n\n请按上面的计划逐步执行。"})
+    messages = _build_initial_messages(task, plan, history)
 
+    stats = {"iterations": 0, "tool_calls": 0, "tokens": 0}
     try:
-        return _run_loop(messages, emit)
+        answer = _run_loop(messages, emit, stats)
     finally:
         save_history(config.WORKING_DIR, messages)  # 无论成功失败都保存历史，便于下次恢复
+    if stats["tool_calls"]:
+        emit("stats", iterations=stats["iterations"], tool_calls=stats["tool_calls"], tokens=stats["tokens"])
+    return answer
 
 
-def _run_loop(messages: list[dict], emit) -> str:
-    """执行 agent 主循环（调用模型、执行工具、循环直到终止），返回最终回答。"""
+def _run_loop(messages: list[dict], emit, stats: dict) -> str:
+    """执行 agent 主循环（调用模型、执行工具、循环直到终止），返回最终回答。
+
+    stats 是可变字典，用于累计执行统计（轮数、工具调用次数、token 消耗）。
+    """
     last_call_key = None  # 上一次工具调用的 (name, args)，用于检测死循环
     repeat_count = 0
     consecutive_failures = 0  # 连续失败次数，用于检测"无法完成任务"
 
     for step in range(1, config.MAX_ITERATIONS + 1):
+        stats["iterations"] = step
         messages = compress_history(messages, emit)  # ① 上下文超限时压缩成摘要
         emit("step", n=step)
 
@@ -253,6 +327,10 @@ def _run_loop(messages: list[dict], emit) -> str:
             resp = _call_model(messages, emit)  # ② 调用大模型
         except Exception as e:
             return f"模型调用失败：{e}"
+        try:
+            stats["tokens"] += resp.usage.total_tokens  # 累计 token 消耗
+        except Exception:
+            pass
 
         msg = resp.choices[0].message  # ③ 解析模型的回复
         finish_reason = resp.choices[0].finish_reason
@@ -289,6 +367,7 @@ def _run_loop(messages: list[dict], emit) -> str:
 
         # 逐个在本地执行工具，并把结果作为 tool 消息回填
         for tc in msg.tool_calls:
+            stats["tool_calls"] += 1
             name = tc.function.name
             args = tc.function.arguments
 

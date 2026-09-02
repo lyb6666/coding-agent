@@ -99,6 +99,8 @@ def _render_event(event_type: str, **data) -> None:
         print(f"  {C.RED}✗ {data['message']}{C.RESET}")
     elif event_type == "summary":
         print(f"  {C.YELLOW}📝 {data['message']}{C.RESET}")
+    elif event_type == "stats":
+        print(f"  {C.DIM}📊 本次执行：{data['iterations']} 轮 · {data['tool_calls']} 次工具调用 · 约 {data['tokens']} tokens{C.RESET}")
     elif event_type == "planning":
         print(f"  {C.MAGENTA}📋 正在规划任务步骤…{C.RESET}")
     elif event_type == "plan":

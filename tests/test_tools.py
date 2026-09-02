@@ -2,6 +2,9 @@
 from coding_agent.tools import (
     read_file,
     write_file,
+    edit_file,
+    delete_file,
+    move_file,
     list_files,
     search_content,
     run_command,
@@ -111,3 +114,74 @@ def test_clip_output_keeps_short_text():
     result, was_truncated = _clip_output(short)
     assert result == short
     assert was_truncated is False
+
+
+def test_edit_file_replaces(tmp_path):
+    p = tmp_path / "f.txt"
+    p.write_text("hello world\n", encoding="utf-8")
+    result = edit_file(str(p), "world", "python")
+    assert "已替换" in result
+    assert "hello python" in p.read_text(encoding="utf-8")
+
+
+def test_edit_file_not_found(tmp_path):
+    p = tmp_path / "f.txt"
+    p.write_text("hello\n", encoding="utf-8")
+    assert "未找到" in edit_file(str(p), "zzz", "xxx")
+
+
+def test_edit_file_ambiguous(tmp_path):
+    p = tmp_path / "f.txt"
+    p.write_text("hello hello\n", encoding="utf-8")
+    assert "唯一" in edit_file(str(p), "hello", "bye")
+
+
+def test_edit_file_empty_old_string(tmp_path):
+    p = tmp_path / "f.txt"
+    p.write_text("hello\n", encoding="utf-8")
+    assert "不能为空" in edit_file(str(p), "", "x")
+
+
+def test_delete_file(tmp_path):
+    p = tmp_path / "f.txt"
+    p.write_text("hi", encoding="utf-8")
+    assert "已删除" in delete_file(str(p))
+    assert not p.exists()
+
+
+def test_delete_file_missing(tmp_path):
+    assert "不存在" in delete_file(str(tmp_path / "nope.txt"))
+
+
+def test_move_file(tmp_path):
+    src = tmp_path / "a.txt"
+    dst = tmp_path / "sub" / "b.txt"
+    src.write_text("hi", encoding="utf-8")
+    assert "已移动" in move_file(str(src), str(dst))
+    assert dst.exists() and not src.exists()
+
+
+def test_move_file_missing_src(tmp_path):
+    assert "不存在" in move_file(str(tmp_path / "nope.txt"), str(tmp_path / "b.txt"))
+
+
+def test_move_file_dst_exists(tmp_path):
+    src = tmp_path / "a.txt"
+    dst = tmp_path / "b.txt"
+    src.write_text("hi", encoding="utf-8")
+    dst.write_text("there", encoding="utf-8")
+    assert "已存在" in move_file(str(src), str(dst))
+
+
+def test_run_command_empty():
+    assert "不能为空" in run_command("   ")
+
+
+def test_search_content_empty_pattern(tmp_path):
+    assert "不能为空" in search_content(str(tmp_path), "")
+
+
+def test_read_file_binary(tmp_path):
+    p = tmp_path / "bin.dat"
+    p.write_bytes(bytes([0, 1, 2]))
+    assert "二进制" in read_file(str(p))

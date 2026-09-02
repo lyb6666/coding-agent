@@ -15,6 +15,9 @@ config.json
 # 会话历史（每个工作目录下自动生成）
 .coding_history.json
 
+# 视频拍摄脚本（个人笔记，不提交）
+视频拍摄脚本.md
+
 # 打包产物（pip install -e . 生成）
 *.egg-info/
 build/

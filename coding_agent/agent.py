@@ -246,15 +246,15 @@ def _run_loop(messages: list[dict], emit) -> str:
     consecutive_failures = 0  # 连续失败次数，用于检测"无法完成任务"
 
     for step in range(1, config.MAX_ITERATIONS + 1):
-        messages = compress_history(messages, emit)
+        messages = compress_history(messages, emit)  # ① 上下文超限时压缩成摘要
         emit("step", n=step)
 
         try:
-            resp = _call_model(messages, emit)
+            resp = _call_model(messages, emit)  # ② 调用大模型
         except Exception as e:
             return f"模型调用失败：{e}"
 
-        msg = resp.choices[0].message
+        msg = resp.choices[0].message  # ③ 解析模型的回复
         finish_reason = resp.choices[0].finish_reason
 
         # 输出达到长度上限被截断：无论有无工具调用，都主动提示（避免静默丢尾）
@@ -262,7 +262,7 @@ def _run_loop(messages: list[dict], emit) -> str:
             emit("retry", message="模型输出达到长度上限，已被截断")
 
         # 没有请求任何工具 -> 视为任务完成
-        if not msg.tool_calls:
+        if not msg.tool_calls:  # ④ 没有工具调用 → 任务完成，返回回答
             content = msg.content or "(模型未返回文本)"
             if finish_reason == "length":
                 # 输出达到长度上限被截断：如实标注，避免静默丢失
@@ -270,7 +270,7 @@ def _run_loop(messages: list[dict], emit) -> str:
             messages.append({"role": "assistant", "content": msg.content or ""})
             return content
 
-        # 记入 assistant 消息（含 tool_calls）
+        # ⑤ 有工具调用：记入 assistant 消息（含 tool_calls）
         messages.append({
             "role": "assistant",
             "content": msg.content or "",
@@ -304,7 +304,7 @@ def _run_loop(messages: list[dict], emit) -> str:
                         f"疑似陷入死循环，已停止执行。")
 
             emit("tool_call", name=name, args=args)
-            result = execute_tool(name, args)
+            result = execute_tool(name, args)  # ⑥ 在本地执行工具
             emit("tool_result", name=name, result=result)
 
             # 连续失败检测：连续多次工具执行失败（不一定是同一命令）→ 判定无法完成任务
@@ -316,6 +316,6 @@ def _run_loop(messages: list[dict], emit) -> str:
                 return (f"连续 {consecutive_failures} 次工具执行失败，"
                         f"疑似无法完成任务，已停止执行。")
 
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})  # ⑦ 结果回填，进入下一轮循环
 
     return "达到最大迭代轮数，任务未在限制内完成。"
